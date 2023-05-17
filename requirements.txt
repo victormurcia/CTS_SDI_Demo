@@ -1,0 +1,9 @@
+# -*- coding: utf-8 -*-
+"""
+Created on Tue May 16 23:50:32 2023
+
+@author: vmurc
+"""
+spacy>=3.0.0,<4.0.0
+streamlit==1.22.0
+https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.0.0/en_core_web_sm-3.0.0.tar.gz
