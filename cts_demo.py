@@ -9,6 +9,7 @@ import pandas as pd
 import spacy
 import en_core_sci_sm
 import re
+import copy
 
 st.set_page_config(layout="wide")
 
@@ -87,7 +88,7 @@ def generate_criteria_profile(criteria_dict):
             if "informed consent" in doc.text.lower():
                 profile[category]["consent"] = True
             if "lung cancer" in doc.text.lower() or "ggo" in doc.text.lower():
-                profile[category]["diagnosis"] = True
+                profile[category]["diagnosis"] = 'lung cancer'
             if "fdg-pet" in doc.text.lower():
                 profile[category]["scheduled_for_FDG-PET"] = True
             if "performance status" in doc.text.lower():
@@ -133,6 +134,16 @@ def calculate_match_index(patient, trial_criteria):
     match_index = matched_criteria / total_criteria if total_criteria > 0 else 0
     print(f"Total SDI: {match_index}")
     return match_index
+
+#Process ages in text
+def extract_age_requirement(criteria):
+    match = re.search(r'Age (\d+) - (\d+)', criteria)
+    if match:
+        min_age = int(match.group(1))
+        max_age = int(match.group(2))
+        return min_age, max_age
+    else:
+        return None, None
 
 #Streamlit code
 st.title('Clinical Trial Matcher')
@@ -226,6 +237,11 @@ if st.button('Calculate Match'):
     trial_criteria = generate_criteria_profile(eligibility)
     sdi = calculate_match_index(patient_profile, trial_criteria)
     # Display final score
-    st.write(patient_profile)
-    st.write(trial_criteria)
     st.write(f'The patient match score for the trial is {sdi}')
+    
+    #Display the profiles for the patient and clinical trial
+    col5, col6 = st.columns(2)
+    with col5:
+        st.write('This is the patient profile \n',patient_profile)
+    with col6:
+        st.write('This is the CT profile \n',trial_criteria)
