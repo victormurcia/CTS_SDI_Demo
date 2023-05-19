@@ -5,7 +5,6 @@ Created on Tue May 16 23:41:58 2023
 @author: vmurc
 """
 import streamlit as st
-import pandas as pd
 import spacy
 import en_core_sci_sm
 import re
@@ -17,6 +16,7 @@ st.set_page_config(layout="wide")
 #Load language model
 nlp = en_core_sci_sm.load()
 #nlp.add_pipe("negex", last=True)
+
 
 #This function breaks the eligibility critiera into inclusion and exclusion criteria
 def extract_eligibility_criteria_scispacy(criteria):
@@ -133,8 +133,10 @@ def calculate_sorensen_dice_index(patient_profile, trial_profile):
         print(f"Patient is excluded due to criteria: {excluded_keys}")
         return 0
 
+    # Only include keys from patient_profile that are also present in the inclusion criteria
+    patient_profile = {key: value for key, value in patient_profile.items() if key in inclusion_criteria}
     # Merge 'inclusion' and 'exclusion' criteria into a single set for comparison
-    trial_set = set(inclusion_criteria.items()) | set(exclusion_criteria.items())
+    trial_set = set(inclusion_criteria.items())# | set(exclusion_criteria.items())
 
     # Convert patient profile to a set
     patient_set = set(patient_profile.items())
@@ -156,7 +158,7 @@ def match_patient_to_trial(patient_profile, trial_profile):
     max_age = final_trial_criteria['inclusion'].get("max_age")
     patient_age = patient_profile.get("age")
     if min_age is not None:
-      if (patient_age < min_age):
+      if (patient_age <= min_age):
           age_check1 = False
       else:
         age_check1 = True
@@ -164,13 +166,13 @@ def match_patient_to_trial(patient_profile, trial_profile):
       age_check1 = True
 
     if max_age is not None:
-      if (patient_age > max_age):
+      if (patient_age >= max_age):
         age_check2 = False
       else:
         age_check2 = True
     else:
         age_check2 = True
-    print(min_age,max_age,patient_age)
+
     age_check = all([age_check1,age_check2])
     final_trial_criteria['inclusion']['age'] = True
     final_patient_profile['age'] = age_check
@@ -186,6 +188,17 @@ def match_patient_to_trial(patient_profile, trial_profile):
     else: 
       final_trial_criteria['inclusion']['performance_status'] = True
       final_patient_profile['performance_status'] = True
+    
+    #Check diagnosis
+    #ct_diagnosis = trial_profile['inclusion'].get("diagnosis")
+    pt_diagnosis = final_patient_profile.get("diagnosis")
+
+    if pt_diagnosis == 'lung cancer':
+      final_patient_profile["diagnosis"] = True
+      final_trial_criteria['inclusion']['diagnosis'] = True
+    else: 
+      final_patient_profile["diagnosis"] = False
+      final_trial_criteria['inclusion']['diagnosis'] = True
 
     # Remove unnecessary keys
     keys_to_remove = ['min_age', 'max_age']
@@ -196,7 +209,6 @@ def match_patient_to_trial(patient_profile, trial_profile):
         final_trial_criteria['exclusion'].pop(key, None)
     #Calculate SDI
     sdi = calculate_sorensen_dice_index(final_patient_profile, final_trial_criteria)
-    print(sdi)
     return sdi,final_patient_profile,final_trial_criteria
 
 #Streamlit code
@@ -245,19 +257,20 @@ with col1:
     ps           = st.selectbox('Performance Score?', (0,1,2,3,4))
     
 with col2:
+    fdgpet    = st.selectbox('Scheduled for FDG-PET?', (True, False))
     pregnant    = st.selectbox('Pregnant?', (True, False))
     psychiatric = st.selectbox('Psychiatric Disorders?', (True, False))
-    irradiation = st.selectbox('Undergoing irradiation?', (True, False))
     
 with col3:
+    consent   = st.selectbox('Can provide consent?', (True, False))
     lactating = st.selectbox('Lactating?', (True, False))
     mpe       = st.selectbox('Malignant Plural Effusion?', (True, False))
-    consent   = st.selectbox('Can provide consent?', (True, False))
 with col4:
     diagnosis = st.selectbox('Enter diagnosis',("lung cancer", "leukemia", "malaria"))
     infection = st.selectbox('Active infection?', (True, False))
-    fdgpet    = st.selectbox('Scheduled for FDG-PET?', (True, False))
-
+    irradiation = st.selectbox('Undergoing irradiation?', (True, False))
+    
+eligibility_threshold = st.number_input('Select eligibility threshold', min_value=0, max_value=100, step=10)
 #Define the patient profile based on user inputs
 patient_profile_text = f"John Doe is a {age}-year-old male who has been diagnosed with {diagnosis}. \
 His diagnosis was confirmed through histological examination. \
@@ -291,8 +304,15 @@ if st.button('Calculate Match'):
     trial_criteria = generate_criteria_profile(eligibility)
     sdi,final_patient_profile,final_trial_criteria = match_patient_to_trial(patient_profile, trial_criteria)
     sdi *= 100
-    # Display final score
-    st.write(f'The patient match score for the trial is {sdi}')
+    
+    #Determine if patient is eligible for clinical trial based on SDI and eligibility threshold
+    if sdi >= eligibility_threshold:
+        eligibility = 'eligible'
+    else:
+        eligibility = 'not eligible'
+        
+    # Display eligibility assessment
+    st.write(f'The patient match score for the trial is {sdi}%. The eligibility threshold has been set to {eligibility_threshold} and so the patient is {eligibility} for this trial')
     
     #Display the profiles for the patient and clinical trial
     col5, col6 = st.columns(2)
