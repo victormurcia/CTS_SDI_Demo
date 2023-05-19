@@ -10,11 +10,13 @@ import spacy
 import en_core_sci_sm
 import re
 import copy
+#from negspacy.negation import Negex
 
 st.set_page_config(layout="wide")
 
 #Load language model
 nlp = en_core_sci_sm.load()
+#nlp.add_pipe("negex", last=True)
 
 #This function breaks the eligibility critiera into inclusion and exclusion criteria
 def extract_eligibility_criteria_scispacy(criteria):
@@ -75,6 +77,7 @@ def extract_patient_info_scispacy(profile):
 
 #Generate criteria profile for clinical trial
 def generate_criteria_profile(criteria_dict):
+    nlp = en_core_sci_sm.load()
 
     profile = {"inclusion": {}, "exclusion": {}}
 
@@ -82,13 +85,22 @@ def generate_criteria_profile(criteria_dict):
         for criterion in criteria_dict[category]:
             doc = nlp(criterion)
             if "age" in doc.text.lower():
-                match = re.search("age\s*>\s*(\d+)", doc.text.lower())
+                match = re.search(r'age\s*(\d+)\s*-\s*(\d+)', doc.text.lower())
                 if match:
-                    profile[category]["age"] = int(match.group(1))
+                    profile[category]["min_age"] = int(match.group(1))
+                    profile[category]["max_age"] = int(match.group(2))
+                else:
+                    match = re.search("age\s*>\s*(\d+)", doc.text.lower())
+                    if match:
+                        profile[category]["min_age"] = int(match.group(1))
+                    else:
+                        match = re.search("age\s*<\s*(\d+)", doc.text.lower())
+                        if match:
+                            profile[category]["max_age"] = int(match.group(1))
             if "informed consent" in doc.text.lower():
                 profile[category]["consent"] = True
             if "lung cancer" in doc.text.lower() or "ggo" in doc.text.lower():
-                profile[category]["diagnosis"] = 'lung cancer'
+                profile[category]["diagnosis"] = True
             if "fdg-pet" in doc.text.lower():
                 profile[category]["scheduled_for_FDG-PET"] = True
             if "performance status" in doc.text.lower():
@@ -105,45 +117,87 @@ def generate_criteria_profile(criteria_dict):
                 profile[category]["active_infection"] = True
             if "neurological" in doc.text.lower() or "psychiatric disorders" in doc.text.lower():
                 profile[category]["neurological_or_psychiatric_disorders"] = True
-
+    
+    profile['exclusion'].pop("scheduled_for_FDG-PET", None)
     return profile
 
 #Calculate Sorensen-Dice Index between patient profile and clinical trial
-def calculate_match_index(patient, trial_criteria):
-    matched_criteria = 0
-    total_criteria = 0
+def calculate_sorensen_dice_index(patient_profile, trial_profile):
+    # Extract 'inclusion' and 'exclusion' criteria from trial profile
+    inclusion_criteria = trial_profile['inclusion']
+    exclusion_criteria = {k: not v for k, v in trial_profile['exclusion'].items()}
 
-    for criterion, value in trial_criteria['inclusion'].items():
-        if criterion in patient:
-            if isinstance(value, bool) and patient[criterion] == value:
-                matched_criteria += 1
-                print(f"{criterion} matched. SDI: 1.0")
-            elif isinstance(value, int) or isinstance(value, float) and patient[criterion] >= value:
-                matched_criteria += 1
-                print(f"{criterion} matched. SDI: 1.0")
-            elif isinstance(value, list) and isinstance(patient[criterion], list):
-                if all(item in patient[criterion] for item in value):
-                    matched_criteria += 1
-                    print(f"{criterion} matched. SDI: 1.0")
-            else:
-                print(f"{criterion} not matched. Patient: {patient[criterion]}, Criterion: {value}")
-        else:
-            print(f"{criterion} not in patient profile.")
-        total_criteria += 1
+    # Check if any key that is True in patient profile is also present in the exclusion criteria
+    excluded_keys = [key for key, value in patient_profile.items() if value and key in exclusion_criteria]
+    if excluded_keys:
+        print(f"Patient is excluded due to criteria: {excluded_keys}")
+        return 0
 
-    match_index = matched_criteria / total_criteria if total_criteria > 0 else 0
-    print(f"Total SDI: {match_index}")
-    return match_index
+    # Merge 'inclusion' and 'exclusion' criteria into a single set for comparison
+    trial_set = set(inclusion_criteria.items()) | set(exclusion_criteria.items())
 
-#Process ages in text
-def extract_age_requirement(criteria):
-    match = re.search(r'Age (\d+) - (\d+)', criteria)
-    if match:
-        min_age = int(match.group(1))
-        max_age = int(match.group(2))
-        return min_age, max_age
+    # Convert patient profile to a set
+    patient_set = set(patient_profile.items())
+
+    # Calculate the Sorensen-Dice Index
+    intersection = len(patient_set & trial_set)
+    sdi = 2. * intersection / (len(patient_set) + len(trial_set))
+    
+    return sdi
+
+#Determine whether patient is a good match or not for clinical trial
+def match_patient_to_trial(patient_profile, trial_profile):
+    
+    #Create a deepcopy of the trial_profile dictionary. Needed to ensure original dictionary is not overwritten
+    final_trial_criteria  = copy.deepcopy(trial_profile)
+    final_patient_profile = copy.deepcopy(patient_profile)
+    # Check age first
+    min_age = final_trial_criteria['inclusion'].get("min_age")
+    max_age = final_trial_criteria['inclusion'].get("max_age")
+    patient_age = patient_profile.get("age")
+    if min_age is not None:
+      if (patient_age < min_age):
+          age_check1 = False
+      else:
+        age_check1 = True
     else:
-        return None, None
+      age_check1 = True
+
+    if max_age is not None:
+      if (patient_age > max_age):
+        age_check2 = False
+      else:
+        age_check2 = True
+    else:
+        age_check2 = True
+    print(min_age,max_age,patient_age)
+    age_check = all([age_check1,age_check2])
+    final_trial_criteria['inclusion']['age'] = True
+    final_patient_profile['age'] = age_check
+
+    # Check performance score
+    min_performance_score = final_trial_criteria['inclusion'].get("performance_status")[0]  
+    max_performance_score = final_trial_criteria['inclusion'].get("performance_status")[-1]
+    patient_performance_score = patient_profile.get("performance_status")
+
+    if patient_performance_score < min_performance_score or patient_performance_score > max_performance_score:
+      final_trial_criteria['inclusion']['performance_status'] = True
+      final_patient_profile['performance_status'] = False
+    else: 
+      final_trial_criteria['inclusion']['performance_status'] = True
+      final_patient_profile['performance_status'] = True
+
+    # Remove unnecessary keys
+    keys_to_remove = ['min_age', 'max_age']
+    for key in keys_to_remove:
+        final_trial_criteria['inclusion'].pop(key, None)
+    keys_to_remove = ['consent']
+    for key in keys_to_remove:
+        final_trial_criteria['exclusion'].pop(key, None)
+    #Calculate SDI
+    sdi = calculate_sorensen_dice_index(final_patient_profile, final_trial_criteria)
+    print(sdi)
+    return sdi,final_patient_profile,final_trial_criteria
 
 #Streamlit code
 st.title('Clinical Trial Matcher')
@@ -235,13 +289,14 @@ patient_profile = {'age': age,
 if st.button('Calculate Match'):
     # Test with a patient profile and trial criteria
     trial_criteria = generate_criteria_profile(eligibility)
-    sdi = calculate_match_index(patient_profile, trial_criteria)
+    sdi,final_patient_profile,final_trial_criteria = match_patient_to_trial(patient_profile, trial_criteria)
+    sdi *= 100
     # Display final score
     st.write(f'The patient match score for the trial is {sdi}')
     
     #Display the profiles for the patient and clinical trial
     col5, col6 = st.columns(2)
     with col5:
-        st.write('This is the patient profile \n',patient_profile)
+        st.write('This is the patient profile \n',final_patient_profile)
     with col6:
-        st.write('This is the CT profile \n',trial_criteria)
+        st.write('This is the CT profile \n',final_trial_criteria)
